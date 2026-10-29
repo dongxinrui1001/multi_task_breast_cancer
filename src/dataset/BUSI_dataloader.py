@@ -18,6 +18,14 @@ def BUSI_dataloader(seed, batch_size, transforms, remove_outliers=False, augment
                     train_size=0.8, classes=None, path_images="./Datasets/Dataset_BUSI_with_GT_postprocessed_128/",
                     oversampling=True, semantic_segmentation=False):
 
+    """构造一次普通的 train/validation/test 数据划分。
+
+    ``path_images`` 必须指向包含 ``mapping.csv``、``images`` 和 ``masks`` 的目录。
+    函数先按类别分层切分，再只对训练集做过采样，最后把三个 DataFrame 包装成
+    ``BUSI`` Dataset 和 PyTorch DataLoader。返回值是
+    ``(train_loader, val_loader, test_loader)``。
+    """
+
     # classes to use by default
     if classes is None:
         classes = ['benign', 'malignant']
@@ -27,13 +35,13 @@ def BUSI_dataloader(seed, batch_size, transforms, remove_outliers=False, augment
     assert path_images.exists(), f"Path '{path_images}' it doesn't exist"
     logging.info(f"Images are contained in the following path: {path_images}")
 
-    # loading mapping file
+    # mapping.csv 是样本索引表；Dataset 不直接扫描目录，而是依赖这里的路径和标签。
     mapping = pd.read_csv(f"{path_images}/mapping.csv")
 
     # filtering specific classes
     mapping = mapping[mapping['class'].isin(classes)]
 
-    # Splitting the mapping dataset into train_mapping, val_mapping and test_mapping
+    # 先切出训练集，再把剩余部分平均切成验证集和测试集；stratify 保持类别比例。
     train_mapping, val_mapping_ = train_test_split(mapping, train_size=train_size, random_state=int(seed), shuffle=True,
                                                    stratify=mapping['class'])
     val_mapping, test_mapping = train_test_split(val_mapping_, test_size=0.5, random_state=int(seed), shuffle=True,
@@ -44,6 +52,7 @@ def BUSI_dataloader(seed, batch_size, transforms, remove_outliers=False, augment
         val_mapping = filter_anomalous_cases(val_mapping)
         test_mapping = filter_anomalous_cases(test_mapping)
 
+    # 只复制训练集中的少数类，验证集和测试集保持真实分布，避免评估偏乐观。
     if oversampling:
         train_mapping_malignant = train_mapping[train_mapping['class'] == 'malignant']
         train_mapping = pd.concat([train_mapping, train_mapping_malignant])
@@ -79,6 +88,12 @@ def BUSI_dataloader(seed, batch_size, transforms, remove_outliers=False, augment
 def BUSI_dataloader_CV(seed, batch_size, transforms, remove_outliers=False, augmentations=None, normalization=None,
                        train_size=0.8, classes=None, n_folds=5, oversampling=True, use_duplicated_to_train=False,
                        path_images="./Datasets/Dataset_BUSI_with_GT_postprocessed_128/", semantic_segmentation=False):
+    """构造分层 K 折交叉验证所需的 DataLoader 列表。
+
+    每一折先由 ``StratifiedKFold`` 产生测试集，再从剩余数据切出验证集。
+    返回三个列表；列表下标对应同一个 fold：
+    ``train_loaders[i]``、``val_loaders[i]``、``test_loaders[i]``。
+    """
 
     # classes to use by default
     if classes is None:
@@ -99,14 +114,14 @@ def BUSI_dataloader_CV(seed, batch_size, transforms, remove_outliers=False, augm
     # filtering specific classes
     mapping = mapping[mapping['class'].isin(classes)]
 
-    # splitting dataset into train-val-test CV
+    # 每一折都保证测试集类别比例尽量接近总体分布。
     fold_trainset, fold_valset, fold_testset = [], [], []
     kfold = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=int(seed))
     for n, (train_ix, test_ix) in enumerate(kfold.split(mapping, mapping['class'])):
         train_val_mapping, test_mapping = mapping.iloc[train_ix], mapping.iloc[test_ix]
         test_mapping['fold'] = [n] * len(test_mapping)
 
-        # Splitting the mapping dataset into train_mapping, val_mapping and test_mapping
+        # 在当前 fold 的训练候选集里继续切分训练集和验证集。
         train_mapping, val_mapping = train_test_split(train_val_mapping, train_size=train_size, random_state=int(seed),
                                                       shuffle=True, stratify=train_val_mapping['class'])
 
@@ -119,6 +134,7 @@ def BUSI_dataloader_CV(seed, batch_size, transforms, remove_outliers=False, augm
             logging.info(f"DD: {train_mapping.shape} {mapping_out_complementary.shape}")
             train_mapping = pd.concat([train_mapping, mapping_out_complementary])
 
+        # 过采样只作用于当前 fold 的训练集，不能把验证/测试样本复制进去。
         if oversampling:
             # train_mapping = oversampling_BUSI(train_mapping, seed)
             train_mapping = deterministic_oversampling(train_mapping)
@@ -153,6 +169,11 @@ def BUSI_dataloader_CV(seed, batch_size, transforms, remove_outliers=False, augm
 def BUSI_dataloader_CV_prod(seed, batch_size, transforms, remove_outliers=False, augmentations=None, normalization=None,
                             train_size=0.8, classes=None, n_folds=5, oversampling=True, use_duplicated_to_train=False,
                             path_images="./Datasets/Dataset_BUSI_with_GT_postprocessed_128/", semantic_segmentation=False):
+    """构造生产/最终训练流程使用的 K 折 DataLoader。
+
+    与 ``BUSI_dataloader_CV`` 的主要区别是：这里把每一折的训练集和验证集
+    合并后再训练，因此返回 ``(train_loaders, test_loaders)``，没有独立验证集。
+    """
 
     # classes to use by default
     if classes is None:
@@ -219,6 +240,11 @@ def BUSI_dataloader_CV_prod(seed, batch_size, transforms, remove_outliers=False,
 
 
 def UCLM_dataloader(batch_size, path_images, augmentations=None, normalization=None, classes=None):
+    """读取外部 UCLM 数据集并返回一个 DataLoader。
+
+    该函数不做交叉验证，只把 mapping.csv 中指定类别的样本作为一个整体加载，
+    主要用于外部数据测试或迁移实验。
+    """
 
     # classes to use by default
     if classes is None:
@@ -245,6 +271,11 @@ def UCLM_dataloader(batch_size, path_images, augmentations=None, normalization=N
 
 
 def filter_anomalous_cases(mapping):
+    """按预先记录的类别和 ID 删除异常样本。
+
+    这是基于人工整理的黑名单过滤，不会自动检测异常；如果数据集 ID 发生变化，
+    这些硬编码 ID 可能不再对应原来的图像。
+    """
     logging.info("Filtering anomalous cases")
     anomalous_cases = {
         'benign': [435, 433, 42, 131, 437, 269, 333, 399, 403, 406, 85, 164, 61, 94, 108, 114, 116, 119, 122, 201, 302,
@@ -260,6 +291,7 @@ def filter_anomalous_cases(mapping):
 
 
 def filter_incongruent_cases(mapping):
+    """删除图像、类别或标注不一致的样本，供重复数据相关实验使用。"""
     logging.info("Filtering anomalous cases")
     mapping_out = mapping.copy()
     anomalous_cases = {
@@ -275,6 +307,11 @@ def filter_incongruent_cases(mapping):
 
 
 def filter_train_cases(mapping):
+    """把指定样本从主训练映射中移出，并返回被移出的互补子集。
+
+    返回 ``(mapping_out, mapping_out_complementary)``；后者可在特定实验中重新
+    拼回训练集，因此该函数本身不会删除磁盘文件。
+    """
     logging.info("Filtering anomalous cases")
     mapping_out = mapping.copy()
     anomalous_cases = {
@@ -304,6 +341,11 @@ def filter_train_cases(mapping):
 
 
 def oversampling_BUSI(mapping_df, seed):
+    """随机补齐少数类，使其数量接近 benign 类数量。
+
+    malignant 使用不放回抽样，normal 使用可放回抽样。该函数保留在代码中，
+    当前交叉验证流程实际使用的是下面的 ``deterministic_oversampling``。
+    """
     n_ben = len(mapping_df[mapping_df['class'] == 'benign'])
     if 'malignant' in set(mapping_df['class']):
         n_mal = len(mapping_df[mapping_df['class'] == 'malignant'])
@@ -318,6 +360,12 @@ def oversampling_BUSI(mapping_df, seed):
 
 
 def deterministic_oversampling(mapping_df):
+    """按类别比例确定性复制训练样本。
+
+    每类复制因子约为 ``round(1 / 类别比例)``，再把额外副本拼回原表。
+    例如某类占 20%，复制因子约为 5，最终会增加 4 份该类数据。
+    返回仍是 DataFrame，原始图像文件不会被复制。
+    """
 
     def compute_scaling_factor(mapping_df):
         data = mapping_df["class"].value_counts(normalize=True).reset_index()
@@ -341,6 +389,12 @@ def deterministic_oversampling(mapping_df):
 
 
 def load_datasets(config_training, config_data, transforms, mode='CV'):
+    """根据配置选择数据加载模式，并统一转发参数。
+
+    ``mode='CV'`` 返回训练、验证、测试三个 DataLoader 列表；
+    ``mode='CV_PROD'`` 返回训练和测试列表；``mode='UCLM'`` 返回一个外部数据
+    DataLoader。训练入口通常只调用这个函数，而不直接调用底层构造函数。
+    """
     if mode == 'CV':
         train_loaders, val_loaders, test_loaders = BUSI_dataloader_CV(seed=config_training['seed'],
                                                                       batch_size=config_data['batch_size'],

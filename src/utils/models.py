@@ -17,6 +17,12 @@ from scipy.ndimage import binary_fill_holes
 
 
 def load_pretrained_model(model: nn.Module, ckpt_path: str):
+    """从 checkpoint 恢复模型参数，并返回加载后的模型。
+
+    checkpoint 由训练脚本的 ``torch.save`` 写出，至少包含
+    ``model_state_dict``。这里使用 ``map_location`` 兼容在 CPU 上读取 GPU
+    保存的权重，然后切换到评估模式，供后续推理使用。
+    """
     """
     It restores a pretrained state model
 
@@ -43,6 +49,7 @@ def inference_binary_segmentation(
         device: str = 'cpu',
         fill_holes: bool = True
 ):
+    """执行二值分割推理，并保存分割图、特征图和 CSV 指标。"""
     """
     It performs binary inference over PyTorch dataloader by means of a trained model. It means that pixels will be
     labeled as 0 or 1.
@@ -107,6 +114,11 @@ def inference_multilabel_segmentation(
         device: str = 'cpu',
         postprocessing: bool = False
 ):
+    """执行多类别语义分割推理。
+
+    模型输出经过 softmax/argmax 后变成每个像素的类别编号，再与真实 mask
+    比较并保存结果。深监督输出会先保存各尺度图，再使用最后一个输出评估。
+    """
     """
     It performs multilabel inference over PyTorch dataloader by means of a trained model. It means that pixels will be
     labeled from 0 to the number of classes.
@@ -189,6 +201,7 @@ def inference_multitask_binary_classification_segmentation(
         path: str,
         device: str = 'cpu'
 ):
+    """执行二分类 + 二值分割的多任务推理。"""
     """
     It performs multitask inference over PyTorch dataloader by means of a trained model. It means that pixels will be
     labeled as 0 or 1 as well as the image will be classified as benign or malignant.
@@ -279,6 +292,12 @@ def inference_multitask_multiclass_classification_segmentation(
         overlap_seg_based_on_class: bool = False,
         overlap_class_based_on_seg: bool = False
 ):
+    """执行三分类 + 二值分割推理，并实现论文中的 PR 后处理。
+
+    ``overlap_seg_based_on_class`` 控制“分类为 normal 时清空分割”；
+    ``overlap_class_based_on_seg`` 控制“分割没有肿瘤时把分类改为 normal”。
+    这两个参数只影响最终测试结果，不参与反向传播。
+    """
     """
     It performs multitask inference over PyTorch dataloader by means of a trained model. It means that pixels will be
     labeled as 0 or 1 as well as the image will be classified as benign or malignant.
@@ -305,7 +324,7 @@ def inference_multitask_multiclass_classification_segmentation(
         test_images = test_data['image'].to(device)
         test_masks = test_data['mask'].to(device)
 
-        # generating segmentation
+        # 模型同时返回分类 logits 和分割 logits；这里先处理分割任务。
         pred_class, features_map = model(test_images)
         if isinstance(features_map, list):
             for n, ds in enumerate(reversed(features_map)):
@@ -313,15 +332,19 @@ def inference_multitask_multiclass_classification_segmentation(
             features_map = features_map[-1]  # in case that deep supervision is being used we got the last output
         else:
             save_features_map(seg=features_map, path=f"{path}/features_map/{label}_{patient_id}_seg.png")
+        # 分割输出是 logits：sigmoid 转概率，0.5 阈值转二值掩膜。
         test_outputs = (torch.sigmoid(features_map) > .5).float()
 
         # converting tensors to numpy arrays
         test_masks = test_masks.detach().cpu().numpy()
         test_outputs = test_outputs.detach().cpu().numpy()
 
+        # 可选的像素数量后处理：去掉小于 threshold 的预测区域。
         if threshold > 0:
             test_outputs = postprocess_binary_segmentation(test_outputs, threshold)
 
+        # PR 规则 1：如果分类分支预测为 normal（类别编号 2），
+        # 则认为图像不应有肿瘤，把分割分支预测的前景像素全部清零。
         if overlap_seg_based_on_class:
             if isinstance(features_map, list):
                 pred_class = torch.mean(torch.stack(pred_class, dim=0), dim=0)
@@ -341,6 +364,8 @@ def inference_multitask_multiclass_classification_segmentation(
 
     results.to_csv(f'{path}/results_segmentation.csv', index=False)
 
+    # 第二遍遍历 test_loader，单独处理分类结果和 PR 规则 2。
+    # 之所以重新遍历，是为了分别保存分割 CSV 和分类 CSV。
     # classification
     patients = []
     ground_truth_label = []
@@ -363,7 +388,7 @@ def inference_multitask_multiclass_classification_segmentation(
         predicted_probabilities.append(test_outputs.detach().cpu().numpy().tolist()[0])
         test_outputs = [pl.argmax() for pl in test_outputs]
 
-        # counting tumor pixels
+        # 统计分割结果中前景像素数量；数量为 0 表示分割没有检测到肿瘤。
         segs = (torch.sigmoid(segs[-1]) > .5).float()
         counter_tumor_pixels = count_pixels(segs.detach().cpu().numpy()).get(1, 0)
 
@@ -371,6 +396,7 @@ def inference_multitask_multiclass_classification_segmentation(
         patients.append(patient_id)
         if len(test_outputs) > 1:
             for r, p in zip(test_label, test_outputs):
+                # PR 规则 2：没有肿瘤像素时，强制将分类结果设为 normal=2。
                 if overlap_class_based_on_seg and counter_tumor_pixels == 0:
                     ground_truth_label.append(int(r.detach().cpu().numpy()[0]))
                     predicted_label.append(2)
@@ -378,6 +404,7 @@ def inference_multitask_multiclass_classification_segmentation(
                     ground_truth_label.append(int(r.detach().cpu().numpy()[0]))
                     predicted_label.append(int(p.detach().cpu().numpy()[0]))
         else:
+            # batch size=1 时走这里；逻辑与上面的批量分支相同。
             if overlap_class_based_on_seg and counter_tumor_pixels == 0:
                 ground_truth_label.append(int(test_label[0].detach().cpu().numpy()))
                 predicted_label.append(2)
@@ -403,6 +430,7 @@ def inference_multiclass_classification(
         path: str,
         device: str = 'cpu',
 ):
+    """执行独立的多分类推理，保存类别概率、预测标签和指标 CSV。"""
     """
     It performs multitask inference over PyTorch dataloader by means of a trained model. It means that pixels will be
     labeled as 0 or 1 as well as the image will be classified as benign or malignant.
@@ -462,6 +490,7 @@ def inference_binary_classification(
         path: str,
         device: str = 'cpu'
 ):
+    """执行独立的二分类推理，使用 sigmoid 和 0.5 阈值获得类别。"""
     """
     It performs binary classification inference over PyTorch dataloader by means of a trained model. It means the image
     will be classified as benign or malignant.
@@ -506,6 +535,11 @@ def inference_binary_classification(
 
 
 def save_binary_segmentation(seg: np.array, path: str, value_non_zero: int = 255):
+    """把二值分割数组保存为 PNG。
+
+    输入中的 0 保持为背景，所有非零像素改成 ``value_non_zero``，默认是
+    白色 255。这样保存的图像适合直接用图像查看器检查。
+    """
     """
     It saves a NumPy array as a binary image
 
@@ -528,6 +562,7 @@ def save_binary_segmentation(seg: np.array, path: str, value_non_zero: int = 255
 
 
 def save_multilabel_segmentation(seg: np.array, path: str):
+    """把多类别分割标签保存成 PNG，并保留类别编号。"""
     """
     It saves a NumPy array as multilabel image
 
@@ -553,12 +588,14 @@ def save_multilabel_segmentation(seg: np.array, path: str):
 
 
 def save_features_map(seg: np.array, path: str):
+    """把模型输出的特征图或分割概率图归一化后保存为 PNG。"""
     seg = seg.detach().cpu().numpy()
     seg = seg[0, 0, :, :].astype(float)
     cv2.imwrite(path, seg)
 
 
 def count_parameters(model: torch.nn.Module) -> int:
+    """统计模型中需要梯度更新的参数总量。"""
     """
     This function counts the trainable parameters of a model.
 

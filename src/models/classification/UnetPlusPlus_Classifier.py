@@ -18,7 +18,9 @@ from monai.networks.nets.basic_unet import Down, TwoConv, UpCat
 from monai.utils import ensure_tuple_rep
 
 
+# 使用 MONAI U-Net++ 编码/解码特征进行分类的网络。
 class UNetPlusPlusClassifier(nn.Module):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(
         self,
         spatial_dims: int = 2,
@@ -122,6 +124,8 @@ class UNetPlusPlusClassifier(nn.Module):
         # )
 
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x: torch.Tensor):
         """
         Args:

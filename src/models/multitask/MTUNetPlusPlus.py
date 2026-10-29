@@ -8,7 +8,9 @@ from monai.networks.nets.basic_unet import Down, TwoConv, UpCat
 from monai.utils import ensure_tuple_rep
 
 
+# U-Net++ 多任务网络，利用共享特征同时完成像素级分割和图像级分类。
 class MTUNetPlusPlus(nn.Module):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(
         self,
         spatial_dims: int = 2,
@@ -86,6 +88,8 @@ class MTUNetPlusPlus(nn.Module):
             nn.Linear(in_features=256, out_features=self.n_classes)  # Classification output
         )
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x: torch.Tensor):
         """
         Args:

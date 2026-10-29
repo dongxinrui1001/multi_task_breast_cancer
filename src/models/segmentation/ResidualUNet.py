@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# 输入块：把原始输入通道映射到网络的基础通道数。
 class in_block(nn.Module):
     """
     in_block is used to connect the input of the whole network.
@@ -25,6 +26,7 @@ class in_block(nn.Module):
             conv1
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, channel_in, channel_out):
         super(in_block, self).__init__()
 
@@ -54,6 +56,8 @@ class in_block(nn.Module):
         )
         self.bn3 = nn.BatchNorm2d(num_features=self.channel_out)
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         path = self.conv1(x)
         path = self.bn1(path)
@@ -70,6 +74,7 @@ class in_block(nn.Module):
         return self.down_level1
 
 
+# 残差卷积块：主分支提取特征，旁路保留输入，最后相加。
 class res_block(nn.Module):
     '''
     res_block used for down and up, toggled by downsample.
@@ -89,6 +94,7 @@ class res_block(nn.Module):
             conv1 will have stride 1.
     '''
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(
             self,
             channel_in,
@@ -132,6 +138,8 @@ class res_block(nn.Module):
         )
         self.bn3 = nn.BatchNorm2d(num_features=self.channel_out)
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
 
         path = self.bn1(x)
@@ -153,6 +161,7 @@ class res_block(nn.Module):
         return output
 
 
+# 编码器：逐级下采样，提取越来越抽象的语义特征，并保存跳跃连接。
 class encoder(nn.Module):
     """
     encoder
@@ -164,6 +173,7 @@ class encoder(nn.Module):
         base_filters: number of filters received from in_block; 16 by default.
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, base_filters):
         super(encoder, self).__init__()
 
@@ -182,6 +192,8 @@ class encoder(nn.Module):
             downsample=True
         )
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         self.down_level2 = self.down_block2(x)
         self.down_level3 = self.down_block3(self.down_level2)
@@ -190,6 +202,7 @@ class encoder(nn.Module):
         return self.codes
 
 
+# 解码器：逐级上采样，并与编码器的同尺度特征拼接以恢复空间细节。
 class decoder(nn.Module):
     """
     decoder
@@ -201,6 +214,7 @@ class decoder(nn.Module):
         base_filters: number of filters consistent with encoder; 16 by default.
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(
             self,
             base_filters
@@ -256,6 +270,8 @@ class decoder(nn.Module):
             downsample=False
         )
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         up3 = self.upsample3(x)
         self.up_level3 = self.up_block3(up3)
@@ -269,6 +285,7 @@ class decoder(nn.Module):
         return self.up_level1
 
 
+# 分割输出头：把解码特征转换成指定类别数的像素 logits。
 class seg_out_block(nn.Module):
     """
     seg_out_block, receive data from decoder and output the segmentation mask
@@ -277,6 +294,7 @@ class seg_out_block(nn.Module):
         n_classes: number of classes
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, base_filters, n_classes=6):
         super(seg_out_block, self).__init__()
 
@@ -288,12 +306,16 @@ class seg_out_block(nn.Module):
             kernel_size=1
         )
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         self.output = self.conv(x)
         return self.output
 
 
+# 把 ResidualUNet 的编码器、解码器和输出头串成完整分割路径。
 class seg_path(nn.Module):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(
             self,
             in_block,
@@ -308,6 +330,8 @@ class seg_path(nn.Module):
         self.decoder = decoder
         self.seg_out_block = seg_out_block
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         self.down_level1 = self.in_block(x)
 
@@ -335,6 +359,7 @@ class seg_path(nn.Module):
         return self.output
 
 
+# 残差 U-Net 分割网络，使用残差块缓解深层网络训练中的梯度问题。
 class ResidualUNet(nn.Module):
     """
     This class implements a variation of 2D Unet network. Main modifications are:
@@ -345,6 +370,7 @@ class ResidualUNet(nn.Module):
 
     name = "Residual UNet"
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, sequences=1, regions=1, width=24):
         super(ResidualUNet, self).__init__()
 
@@ -353,6 +379,8 @@ class ResidualUNet(nn.Module):
         self.decoder = decoder(base_filters=width)
         self.out_block = seg_out_block(base_filters=width, n_classes=regions)
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
         x = self.in_block(x)
         x = self.encoder(x)

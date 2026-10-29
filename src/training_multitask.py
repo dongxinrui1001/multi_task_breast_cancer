@@ -31,7 +31,17 @@ from src.utils.models import load_pretrained_model
 from src.utils.visualization import plot_evolution
 
 
+# 本文件是项目真正的多任务训练入口。
+# 运行命令：python -m src.training_multitask
+# 执行顺序：读取配置 -> 构造数据 -> 初始化模型 -> 4 折训练 -> 保存最佳模型
+# -> 测试集推理 -> 汇总分割和分类结果。
+
 def processes_classification_predicted(num_classes, pred_logits, gt_label, gt_list, pred_list):
+    """将分类 logits 转换为类别编号，并追加到真实标签和预测标签列表。
+
+    pred_logits 通常形状为 (batch, 类别数)；启用深监督时也可能是张量列表。
+    三分类使用 softmax + argmax，二分类使用 sigmoid + 0.5 阈值。
+    """
     # averaging prediction if deep supervision
     if isinstance(pred_logits, list):
         pred_logits = torch.mean(torch.stack(pred_logits, dim=0), dim=0)
@@ -63,6 +73,7 @@ def processes_classification_predicted(num_classes, pred_logits, gt_label, gt_li
 
 
 def process_segmentation_predicted(outputs, masks):
+    """把分割 logits 转为二值掩膜，并计算当前批次的 Dice 分数。"""
     # measuring DICE error
     if isinstance(outputs, list):
         outputs = outputs[-1]
@@ -72,6 +83,7 @@ def process_segmentation_predicted(outputs, masks):
 
 
 def train_one_epoch(num_classes):
+    """完成一轮训练：前向计算、联合损失、反向传播和参数更新。"""
     training_loss, training_dice = 0., 0.
     gt_label, pred_label = [], []
 
@@ -118,6 +130,7 @@ def train_one_epoch(num_classes):
 
 @torch.inference_mode()
 def validate_one_epoch(num_classes):
+    """在验证集上计算联合损失和指标；验证阶段不更新模型参数。"""
     val_loss, seg_val_loss, cls_val_loss, val_dice = 0.0, 0.0, 0.0, 0.0
     val_gt_label, val_pred_label = [], []
 
@@ -165,20 +178,20 @@ def validate_one_epoch(num_classes):
 # for beta in betas:
 # beta = 5
 # print(beta)
-# initializing times
+# 记录整个实验的开始时间，最后用它计算全部 fold 的总耗时。
 init_time = time.perf_counter()
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-# loading config file
+# 读取 YAML 配置；五个返回值分别控制模型、优化器、损失、训练和数据。
 config_model, config_opt, config_loss, config_training, config_data = load_config_file(path='./src/config.yaml')
 if config_training['CV'] < 2:
     sys.exit("This code is prepared for receiving a CV greater than 1")
 
-# initializing seed and gpu if possible
+# 固定随机种子，并选择 CUDA 或 CPU。
 seed_everything(config_training['seed'], cuda_benchmark=config_training['cuda_benchmark'])
 dev = device_setup()
 
-# initializing folder structures and log
+# 为本次运行创建独立目录，保存配置、日志、checkpoint 和结果。
 # config_training['alpha'] = alpha
 alpha = config_training['alpha']
 run_path = f"runs/{timestamp}_{config_model['architecture']}_{config_model['width']}_alpha_{config_training['alpha']}" \
@@ -202,13 +215,13 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
     logging.info(f"\n\n *********************  FOLD {n}  ********************* \n\n")
     logging.info(f"\n\n ###############  TRAINING PHASE  ###############  \n\n")
 
-    # creating specific paths and experiment's objects for each fold
+    # 每个 fold 使用独立的输出子目录，避免不同折的结果互相覆盖。
     fold_time = time.perf_counter()
     Path(f"{run_path}/fold_{n}/segs/").mkdir(parents=True, exist_ok=True)
     Path(f"{run_path}/fold_{n}/plots/").mkdir(parents=True, exist_ok=True)
     Path(f"{run_path}/fold_{n}/features_map/").mkdir(parents=True, exist_ok=True)
 
-    # artefacts initialization
+    # 创建模型、优化器、分割损失、分类损失和学习率调度器。
     model, optimizer, seg_criterion, cls_criterion, scheduler = load_multitask_experiment_artefacts(config_data, config_model, config_opt, config_loss, n_augments, run_path)
     model = model.to(dev)
 
@@ -222,21 +235,21 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
         current_lr = optimizer.param_groups[0]["lr"]
         start_epoch_time = time.perf_counter()
 
-        # Make sure gradient tracking is on, and do a pass over the data
+        # 训练阶段启用梯度；Dropout 和 BatchNorm 也切换到训练行为。
         model.train(True)
         avg_train_loss, avg_dice, train_acc, train_f1_score = train_one_epoch(n_classes)
 
-        # We don't need gradients on to do reporting
+        # 验证阶段不更新参数，只进行前向计算并记录指标。
         model.train(False)
         avg_validation_loss, avg_validation_dice, val_acc_score, val_f1_score, segmentation_val_loss, classification_val_loss = validate_one_epoch(n_classes)
 
-        # # Update the learning rate at the end of each epoch
+        # plateau 调度器根据验证损失调整学习率，cosine 调度器按 epoch 调整。
         if config_opt['scheduler'] == 'cosine':
             scheduler.step()
         else:
             scheduler.step(avg_validation_loss)
 
-        # Track the best performance, and save the model's state
+        # 发现更低验证损失时保存 checkpoint，测试阶段重新加载该最佳权重。
         if avg_validation_loss < best_validation_loss:
             patience = 0  # restarting patience
             best_validation_loss = avg_validation_loss
@@ -274,7 +287,7 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
                                          f'{train_f1_score:.4f},{val_acc_score:.4f},{val_f1_score:.4f}',
                            close=True)
 
-        # early stopping
+        # 验证损失连续多轮没有改善时停止当前 fold。
         if patience > config_training['max_patience']:
             logging.info(f"\nValidation loss did not improve over the last {patience} epochs. Stopping training")
             break
@@ -285,15 +298,13 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
     plot_evolution(metrics, columns=['Train_dice', 'Validation_dice'], path=f'{run_path}/fold_{n}/segmentation_metrics_evolution.png')
     plot_evolution(metrics, columns=['Train_acc', 'Train_F1', 'Validation_acc', 'Validation_F1'], path=f'{run_path}/fold_{n}/classification_metrics_evolution.png')
 
-    """
-    INFERENCE PHASE
-    """
+    # INFERENCE PHASE：训练结束后使用最佳 checkpoint 在测试集上推理。
 
-    # results for validation dataset
+    # 这里的日志标题沿用原代码；实际下面执行的是测试集评估。
     logging.info(f"\n\n ###############  VALIDATION PHASE  ###############  \n\n")
     model = load_pretrained_model(model, f'{run_path}/fold_{n}/model_{timestamp}_fold_{n}')
 
-    # results for test dataset
+    # 三分类调用 multiclass 版本；二分类调用 binary 版本。
     logging.info(f"\n\n ###############  TESTING PHASE  ###############  \n\n")
     if len(config_data['classes']) <= 2:
         test_results_segmentation, test_results_classification = inference_multitask_binary_classification_segmentation(model=model, test_loader=test_loader, path=f"{run_path}/fold_{n}/", device=dev)
@@ -313,10 +324,10 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
     del model
 
 
-# saving final results as an Excel file
+# 汇总所有 fold 的分割结果并保存为 Excel。
 save_segmentation_results(run_path)
 
-# saving final results as an Excel file
+# 汇总所有 fold 的分类结果并保存为 Excel。
 save_classification_results(run_path, len(config_data['classes']))
 
 # Measuring total time

@@ -3,12 +3,14 @@ from torch import nn
 from collections import OrderedDict
 
 
+# 使用 1×1 卷积调整通道数；空间高度和宽度不变。
 def conv1x1(in_channels, out_channels):
     """ 2D convolution which uses a kernel size of 1"""
 
     return nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=(1, 1))
 
 
+# 创建 3×3 卷积；stride 控制下采样，groups 控制分组卷积，dilation 控制膨胀范围。
 def conv3x3(in_channels, out_channels, stride=1, dilation=1):
     """ 2D convolution which uses a kernel size of 3"""
 
@@ -16,7 +18,9 @@ def conv3x3(in_channels, out_channels, stride=1, dilation=1):
                      padding=dilation, dilation=dilation)
 
 
+# 组合卷积和 ReLU 激活，用于 AdityanNetwork 中的基础特征提取。
 class ConvReLU(nn.Sequential):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, in_channels, out_channels):
         super().__init__(
             OrderedDict(
@@ -28,7 +32,9 @@ class ConvReLU(nn.Sequential):
         )
 
 
+# 一个编码/解码层级的卷积块，先提取特征，再把通道数调整为后续层需要的大小。
 class LevelBlock(nn.Sequential):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, in_channels, mid_channels, out_channels):
         super().__init__(
             OrderedDict(
@@ -39,7 +45,9 @@ class LevelBlock(nn.Sequential):
         )
 
 
+# 3×3 卷积后接 Sigmoid，把特征转换为范围在 0 到 1 的分割概率。
 class Conv3x3Sigmoid(nn.Sequential):
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, in_channels):
         super().__init__(
             OrderedDict(
@@ -51,10 +59,12 @@ class Conv3x3Sigmoid(nn.Sequential):
         )
 
 
+# 另一种多任务基线网络，包含共享编码路径、分割输出头和分类输出头。
 class Adityan(nn.Module):
 
     name = "Adityan network"
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, sequences, regions, width):
         super(Adityan, self).__init__()
 
@@ -100,6 +110,8 @@ class Adityan(nn.Module):
         self.seg_out = conv1x1(widths[0], regions)
         self.rec_out = conv3x3(widths[0], regions)
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
 
         # Encoding phase

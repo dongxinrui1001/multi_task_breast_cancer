@@ -3,12 +3,14 @@ from torch import nn
 from collections import OrderedDict
 
 
+# 使用 1×1 卷积调整通道数；空间高度和宽度不变。
 def conv1x1(in_channels, out_channels):
     """ 3D convolution which uses a kernel size of 1"""
 
     return nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=(1, 1))
 
 
+# 创建 3×3 卷积；stride 控制下采样，groups 控制分组卷积，dilation 控制膨胀范围。
 def conv3x3(in_channels, out_channels, stride=1, groups=1, dilation=1, bias=False):
     """ 3D convolution which uses a kernel size of 3"""
 
@@ -16,6 +18,7 @@ def conv3x3(in_channels, out_channels, stride=1, groups=1, dilation=1, bias=Fals
                      padding=dilation, groups=groups, bias=bias, dilation=dilation)
 
 
+# 组合卷积、归一化和 LeakyReLU 激活。把重复出现的卷积小模块封装起来，输入形状为 (N,C,H,W)，输出空间尺寸通常不变。
 class ConvInNormLeReLU(nn.Sequential):
     """
     This class stacks a 3D Convolution, Instance Normalization and Leaky ReLU layers.
@@ -27,6 +30,7 @@ class ConvInNormLeReLU(nn.Sequential):
 
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, in_channels, out_channels):
         super(ConvInNormLeReLU, self).__init__(
             OrderedDict(
@@ -39,6 +43,7 @@ class ConvInNormLeReLU(nn.Sequential):
         )
 
 
+# 一个编码/解码层级的卷积块，先提取特征，再把通道数调整为后续层需要的大小。
 class LevelBlock(nn.Sequential):
     """
     This class stacks two blocks of ConvInNormLeReLU (3D Convolution, Instance Normalization and Leaky ReLU layers).
@@ -51,6 +56,7 @@ class LevelBlock(nn.Sequential):
 
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, in_channels, mid_channels, out_channels):
         super(LevelBlock, self).__init__(
             OrderedDict(
@@ -61,11 +67,13 @@ class LevelBlock(nn.Sequential):
         )
 
 
+# nnU-Net 风格多任务网络，forward 返回 (classification_logits, segmentation_logits)。
 class MTnnUNet(nn.Module):
     """
     This class extends nnU-Net model for Multi-task segmentation and classification
     """
 
+    # 初始化网络层和超参数；此阶段只搭建模块，不执行前向计算。
     def __init__(self, sequences, regions, n_classes=3):
         super().__init__()
 
@@ -131,6 +139,7 @@ class MTnnUNet(nn.Module):
             nn.Linear(in_features=256, out_features=self.n_classes)  # Classification output
         )
 
+    # 按代码指定的初始化策略初始化卷积、归一化层和线性层参数。
     def weights_initialization(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -139,6 +148,8 @@ class MTnnUNet(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+    # 执行一次前向传播；输入是批量图像张量，返回当前模型定义的 logits。
+    # 注意：分类模型通常返回分类 logits，分割模型返回像素 logits；不要在模型内部提前 sigmoid/softmax，损失函数会处理。
     def forward(self, x):
 
         # Encoding phase
