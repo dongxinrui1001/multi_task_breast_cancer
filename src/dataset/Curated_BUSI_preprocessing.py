@@ -20,7 +20,7 @@ import cv2
 # =======================
 # User-Configurable Settings
 # =======================
-ROOT_DATA = "./data/"
+ROOT_DATA =  r"F:\daimaFuxian\multi_task_breast_cancer\data"
 INPUT_FOLDER = "Dataset_BUSI_with_GT"
 
 # Preprocessed BUSI dataset
@@ -30,7 +30,7 @@ CLASS_NAMES = ["benign", "malignant", "normal"]
 
 # Curated BUSI dataset
 CURATED = True  # Set True to keep only images in the curated mapping
-CURATED_MAPPING_FILE = "./data/mapping_curated_BUSI.csv"
+CURATED_MAPPING_FILE = r"F:\daimaFuxian\multi_task_breast_cancer\data\mapping_curated_BUSI.csv"
 CURATED_OUTPUT_FOLDER = "Curated_BUSI_128"
 
 
