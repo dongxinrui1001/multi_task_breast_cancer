@@ -1,5 +1,5 @@
 model: # model hyper-parameters
-  architecture: MTnnUNet
+  architecture: MTUNetPlusPlus
   sequences: 1
   width: 24
   deep_supervision: True
