@@ -288,9 +288,9 @@ for n, (training_loader, validation_loader, test_loader) in enumerate(zip(train_
                            close=True)
 
         # 验证损失连续多轮没有改善时停止当前 fold。
-        if patience > config_training['max_patience']:
-            logging.info(f"\nValidation loss did not improve over the last {patience} epochs. Stopping training")
-            break
+       #if patience > config_training['max_patience']:
+        #    logging.info(f"\nValidation loss did not improve over the last {patience} epochs. Stopping training")
+         #   break
 
     # store metrics
     metrics = pd.read_csv(f'{run_path}/fold_{n}/metrics.csv')
