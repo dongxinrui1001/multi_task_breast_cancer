@@ -14,6 +14,7 @@ from monai.networks.nets import EfficientNetBN
 from src.models.multitask.Multi_BTS_UNet import Multi_BTS_UNet
 from src.models.multitask.Multi_FSB_BTS_UNet import Multi_FSB_BTS_UNet
 from src.models.multitask.MTUNetPlusPlus import MTUNetPlusPlus
+from src.models.multitask.MTUNetPlusPlus_EMCAD import MTUNetPlusPlus_EMCAD
 from src.models.multitask.MTnnUNet import MTnnUNet
 from monai.networks.nets import UNet, AttentionUnet, BasicUnetPlusPlus
 from monai.losses import DiceLoss, DiceFocalLoss, GeneralizedDiceLoss, DiceCELoss, HausdorffDTLoss, FocalLoss
@@ -157,10 +158,12 @@ def init_multitask_model(
         model = MTUNetPlusPlus(in_channels=sequences, out_channels=regions, n_classes=n_classes, deep_supervision=deep_supervision)
     elif architecture == "MTnnUNet":
         model = MTnnUNet(sequences=sequences, regions=regions, n_classes=n_classes)
+    elif architecture == "MTUNetPlusPlus_EMCAD":
+        model = MTUNetPlusPlus_EMCAD(spatial_dims=2,in_channels=sequences,out_channels=regions, n_classes=n_classes,deep_supervision=deep_supervision)
     else:
         model = torch.nn.Module()
         assert ("The model selected does not exist. Please, chose some of the following architectures: "
-                "Multi-task nnU-Net (MTnnUNet) or Multi-task UNet++ (MTUNetPlusPlus)")
+                "Multi-task nnU-Net (MTnnUNet) or Multi-task UNet++ (MTUNetPlusPlus) or MTUNetPlusPlus with EMCAD decoder")
 
     # Saving the model scheme in a .txt file
     if save_folder is not None:

@@ -1,5 +1,5 @@
 model: # model hyper-parameters
-  architecture: MTnnUNet
+  architecture: MTUNetPlusPlus_EMCAD
   sequences: 1
   width: 24
   deep_supervision: True
@@ -25,7 +25,7 @@ training:
   max_patience: 50
   CV: 4
   cuda_benchmark: False
-  alpha: 0.35
+  alpha: 0.85
   threshold_postprocessing: 0
   overlap_seg_based_on_class: True
   overlap_class_based_on_seg: True
